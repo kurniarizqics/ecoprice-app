@@ -3,6 +3,12 @@ import { supabase } from './supabaseClient'
 import { Scanner } from '@yudiel/react-qr-scanner'
 
 export default function App() {
+  const [session, setSession] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [isSignUp, setIsSignUp] = useState(false)
+
   const [batches, setBatches] = useState([])
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
@@ -10,10 +16,9 @@ export default function App() {
   const [showScanner, setShowScanner] = useState(false)
   const [showPos, setShowPos] = useState(false)
 
-  // State untuk pencarian, filter, dan active tab (home, report, pos, scan, add)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterType, setFilterType] = useState('all')
-  const [activeTab, setActiveTab] = useState('home') // 'home', 'report'
+  const [activeTab, setActiveTab] = useState('home')
 
   const [formData, setFormData] = useState({
     product_id: '8991234567890',
@@ -22,6 +27,22 @@ export default function App() {
   })
 
   const [posCart, setPosCart] = useState([])
+
+  // Cek sesi login saat aplikasi dimuat
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setAuthLoading(false)
+    })
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
 
   const fetchBatches = async () => {
     setLoading(true)
@@ -38,7 +59,6 @@ export default function App() {
     setLoading(false)
   }
 
-  // Ambil riwayat transaksi dari Supabase
   const fetchTransactions = async () => {
     const { data, error } = await supabase
       .from('transactions')
@@ -53,12 +73,39 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchBatches()
-    fetchTransactions()
-  }, [])
+    if (session) {
+      fetchBatches()
+      fetchTransactions()
+    }
+  }, [session])
+
+  // Handler Login & Register
+  const handleAuth = async (e) => {
+    e.preventDefault()
+    if (isSignUp) {
+      const { error } = await supabase.auth.signUp({ email, password })
+      if (error) alert('Gagal mendaftar: ' + error.message)
+      else alert('Pendaftaran berhasil! Silakan cek email atau langsung masuk jika konfirmasi dimatikan.')
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) alert('Gagal masuk: ' + error.message)
+    }
+  }
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut()
+    setSession(null)
+  }
+
+  const isAdmin = session?.user?.email?.toLowerCase().includes('admin')
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    if (!isAdmin) {
+      alert('Akses ditolak! Hanya Admin yang dapat menambah batch.')
+      return
+    }
+
     const { error } = await supabase
       .from('item_batches')
       .insert([
@@ -82,6 +129,10 @@ export default function App() {
   }
 
   const handleDeleteBatch = async (batchId) => {
+    if (!isAdmin) {
+      alert('Akses ditolak! Hanya Admin yang dapat menghapus batch.')
+      return
+    }
     if (!window.confirm(`Yakin ingin menghapus Batch #${batchId}?`)) return
 
     const { error } = await supabase
@@ -155,14 +206,12 @@ export default function App() {
     })
   }
 
-  // Proses Checkout Kasir & Simpan Riwayat Transaksi ke Database
   const handleCheckout = async () => {
     if (posCart.length === 0) return
     if (!window.confirm('Proses transaksi pembayaran ini? Stok akan otomatis dikurangi.')) return
 
     const totalAmount = posCart.reduce((sum, item) => sum + (item.current_price * item.qty), 0)
 
-    // 1. Simpan ke tabel transactions
     const { data: txData, error: txError } = await supabase
       .from('transactions')
       .insert([{ total_amount: totalAmount }])
@@ -175,7 +224,6 @@ export default function App() {
 
     const newTxId = txData[0].transaction_id
 
-    // 2. Simpan item detail ke transaction_items & kurangi stok batch
     for (const item of posCart) {
       const subtotal = item.current_price * item.qty
       
@@ -218,12 +266,72 @@ export default function App() {
   const totalStockCount = batches.reduce((sum, b) => sum + (b.stock_quantity || 0), 0)
   const cartTotalAmount = posCart.reduce((sum, item) => sum + (item.current_price * item.qty), 0)
 
-  // Statistik Laporan Penjualan
   const totalRevenue = transactions.reduce((sum, tx) => sum + Number(tx.total_amount), 0)
   const totalItemsSold = transactions.reduce((sum, tx) => {
     const itemsCount = tx.transaction_items?.reduce((s, i) => s + i.qty, 0) || 0
     return sum + itemsCount
   }, 0)
+
+  if (authLoading) {
+    return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 text-sm">Memuat sesi pengguna...</div>
+  }
+
+  // TAMPILAN HALAMAN LOGIN JIKA BELUM MASUK
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-800 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl max-w-md w-full p-8 shadow-sm border border-slate-200">
+          <div className="text-center mb-6">
+            <span className="text-3xl">🌿</span>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 mt-2">EcoPrice Login</h1>
+            <p className="text-xs text-slate-500 mt-1">Masuk untuk mengelola sistem kasir dan inventaris toko.</p>
+          </div>
+
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Email</label>
+              <input 
+                type="email" 
+                placeholder="contoh: admin@ecoprice.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Password</label>
+              <input 
+                type="password" 
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                required
+              />
+            </div>
+
+            <button 
+              type="submit"
+              className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-3 rounded-xl text-sm transition cursor-pointer shadow-sm"
+            >
+              {isSignUp ? 'Daftar Akun Baru' : 'Masuk Aplikasi'}
+            </button>
+          </form>
+
+          <div className="text-center mt-6">
+            <button 
+              onClick={() => setIsSignUp(!isSignUp)}
+              className="text-xs text-slate-500 hover:text-slate-800 font-medium cursor-pointer"
+            >
+              {isSignUp ? 'Sudah punya akun? Masuk di sini' : 'Belum punya akun? Daftar'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-6 md:p-10 pb-24 md:pb-10">
@@ -234,8 +342,11 @@ export default function App() {
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xl">🌿</span>
               <h1 className="text-2xl font-bold tracking-tight text-slate-900">EcoPrice</h1>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ml-2 ${isAdmin ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'}`}>
+                {isAdmin ? '👑 ADMIN' : '🧑‍💼 KASIR'}
+              </span>
             </div>
-            <p className="text-sm text-slate-500">Sistem otomatis menampilkan harga tiap batch secara real-time.</p>
+            <p className="text-sm text-slate-500">Login sebagai: <span className="font-medium text-slate-700">{session.user.email}</span></p>
           </div>
           
           <div className="hidden md:flex items-center gap-3 flex-wrap">
@@ -245,12 +356,14 @@ export default function App() {
             >
               📦 Produk & Stok
             </button>
-            <button 
-              onClick={() => setActiveTab('report')}
-              className={`font-medium px-4 py-2 rounded-lg shadow-sm transition text-sm cursor-pointer ${activeTab === 'report' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'}`}
-            >
-              📊 Laporan Penjualan
-            </button>
+            {isAdmin && (
+              <button 
+                onClick={() => setActiveTab('report')}
+                className={`font-medium px-4 py-2 rounded-lg shadow-sm transition text-sm cursor-pointer ${activeTab === 'report' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+              >
+                📊 Laporan Penjualan
+              </button>
+            )}
             <button 
               onClick={() => setShowPos(true)}
               className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
@@ -263,17 +376,19 @@ export default function App() {
             >
               📷 Scan Barcode
             </button>
+            {isAdmin && (
+              <button 
+                onClick={() => setShowForm(!showForm)}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
+              >
+                <span>{showForm ? '✕ Tutup Form' : '+ Tambah Batch'}</span>
+              </button>
+            )}
             <button 
-              onClick={() => setShowForm(!showForm)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
+              onClick={handleLogout}
+              className="bg-red-50 border border-red-200 hover:bg-red-100 text-red-600 font-medium px-4 py-2 rounded-lg shadow-sm transition text-sm cursor-pointer"
             >
-              <span>{showForm ? '✕ Tutup Form' : '+ Tambah Batch'}</span>
-            </button>
-            <button 
-              onClick={() => { fetchBatches(); fetchTransactions(); }}
-              className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
-            >
-              🔄 Sync
+              🚪 Keluar
             </button>
           </div>
         </div>
@@ -377,12 +492,11 @@ export default function App() {
           </div>
         )}
 
-        {/* KONTEN UTAMA BERDASARKAN TAB AKTIF */}
-        {activeTab === 'report' ? (
+        {/* KONTEN UTAMA */}
+        {activeTab === 'report' && isAdmin ? (
           <div>
             <h2 className="text-xl font-bold text-slate-900 mb-4">📊 Laporan & Riwayat Penjualan</h2>
 
-            {/* Widget Ringkasan Omset */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
               <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Pendapatan (Omset)</p>
@@ -398,7 +512,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Daftar Riwayat Transaksi */}
             <h3 className="text-lg font-bold text-slate-800 mb-3">Detail Nota Transaksi</h3>
             {transactions.length === 0 ? (
               <p className="text-slate-500 text-sm bg-white p-6 rounded-2xl border border-slate-200 text-center">Belum ada riwayat transaksi penjualan yang tercatat.</p>
@@ -439,7 +552,6 @@ export default function App() {
           </div>
         ) : (
           <div>
-            {/* Ringkasan Statistik Dashboard */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
               <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Batch Aktif</p>
@@ -459,8 +571,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Form Tambah Batch */}
-            {showForm && (
+            {/* Form Tambah Batch (Hanya Admin) */}
+            {showForm && isAdmin && (
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 transition-all">
                 <h2 className="text-lg font-semibold text-slate-800 mb-4">Input Batch Produk Baru</h2>
                 <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -544,7 +656,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Daftar Produk */}
             <h2 className="text-xl font-bold text-slate-900 mb-4">Daftar Produk Susu</h2>
 
             {loading ? (
@@ -564,13 +675,15 @@ export default function App() {
                           <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${batch.days_left !== undefined && batch.days_left <= 3 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
                             {batch.days_left !== undefined ? `${batch.days_left} Hari Lagi` : 'Segera Exp'}
                           </span>
-                          <button 
-                            onClick={() => handleDeleteBatch(batch.batch_id)}
-                            className="text-slate-400 hover:text-red-600 transition text-xs p-1 cursor-pointer"
-                            title="Hapus Batch"
-                          >
-                            🗑️
-                          </button>
+                          {isAdmin && (
+                            <button 
+                              onClick={() => handleDeleteBatch(batch.batch_id)}
+                              className="text-slate-400 hover:text-red-600 transition text-xs p-1 cursor-pointer"
+                              title="Hapus Batch"
+                            >
+                              🗑️
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -628,13 +741,15 @@ export default function App() {
             <span>Produk</span>
           </button>
           
-          <button 
-            onClick={() => setActiveTab('report')}
-            className={`flex flex-col items-center text-xs font-medium cursor-pointer py-1 ${activeTab === 'report' ? 'text-emerald-600 font-bold' : 'text-slate-700'}`}
-          >
-            <span className="text-lg">📊</span>
-            <span>Laporan</span>
-          </button>
+          {isAdmin && (
+            <button 
+              onClick={() => setActiveTab('report')}
+              className={`flex flex-col items-center text-xs font-medium cursor-pointer py-1 ${activeTab === 'report' ? 'text-emerald-600 font-bold' : 'text-slate-700'}`}
+            >
+              <span className="text-lg">📊</span>
+              <span>Laporan</span>
+            </button>
+          )}
 
           <button 
             onClick={() => setShowScanner(true)}
@@ -657,12 +772,22 @@ export default function App() {
             )}
           </button>
 
+          {isAdmin && (
+            <button 
+              onClick={() => { setActiveTab('home'); setShowForm(!showForm); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+              className="flex flex-col items-center text-slate-700 hover:text-emerald-600 text-xs font-medium cursor-pointer py-1"
+            >
+              <span className="text-lg">➕</span>
+              <span>Tambah</span>
+            </button>
+          )}
+
           <button 
-            onClick={() => { setActiveTab('home'); setShowForm(!showForm); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-            className="flex flex-col items-center text-slate-700 hover:text-emerald-600 text-xs font-medium cursor-pointer py-1"
+            onClick={handleLogout}
+            className="flex flex-col items-center text-red-600 text-xs font-medium cursor-pointer py-1"
           >
-            <span className="text-lg">➕</span>
-            <span>Tambah</span>
+            <span className="text-lg">🚪</span>
+            <span>Keluar</span>
           </button>
         </div>
 
