@@ -6,11 +6,12 @@ export default function App() {
   const [batches, setBatches] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
-  const [showScanner, setShowScanner] = useState(false) // State untuk modal scanner kamera
+  const [showScanner, setShowScanner] = useState(false)
+  const [showPos, setShowPos] = useState(false) // State untuk modal kasir / POS
 
   // State untuk pencarian dan filter
   const [searchTerm, setSearchTerm] = useState('')
-  const [filterType, setFilterType] = useState('all') // 'all', 'urgent', 'safe'
+  const [filterType, setFilterType] = useState('all')
 
   // State form input untuk batch baru
   const [formData, setFormData] = useState({
@@ -19,7 +20,9 @@ export default function App() {
     expiry_date: ''
   })
 
-  // Ambil data dari view Supabase: v_ecoprice_products
+  // State untuk keranjang kasir (POS)
+  const [posCart, setPosCart] = useState([])
+
   const fetchBatches = async () => {
     setLoading(true)
     const { data, error } = await supabase
@@ -39,10 +42,8 @@ export default function App() {
     fetchBatches()
   }, [])
 
-  // Fungsi simpan batch baru ke tabel item_batches
   const handleSubmit = async (e) => {
     e.preventDefault()
-    
     const { error } = await supabase
       .from('item_batches')
       .insert([
@@ -58,17 +59,12 @@ export default function App() {
       alert('Gagal menambah batch: ' + error.message)
     } else {
       alert('Berhasil menambah batch baru!')
-      setFormData({
-        product_id: '8991234567890',
-        stock_quantity: '',
-        expiry_date: ''
-      })
+      setFormData({ product_id: '8991234567890', stock_quantity: '', expiry_date: '' })
       setShowForm(false)
       fetchBatches()
     }
   }
 
-  // Fungsi hapus batch berdasarkan batch_id
   const handleDeleteBatch = async (batchId) => {
     if (!window.confirm(`Yakin ingin menghapus Batch #${batchId}?`)) return
 
@@ -85,35 +81,18 @@ export default function App() {
     }
   }
 
-  // Fungsi Cetak Barcode per Batch
   const handlePrintBarcode = (batch) => {
     const printWindow = window.open('', '_print', 'height=600,width=400')
-    
     printWindow.document.write(`
       <html>
         <head>
           <title>Cetak Barcode - ${batch.product_name}</title>
           <style>
-            body {
-              font-family: sans-serif;
-              text-align: center;
-              padding: 20px;
-              margin: 0;
-            }
-            .label-card {
-              border: 1px dashed #ccc;
-              padding: 15px;
-              display: inline-block;
-              border-radius: 8px;
-              background: #fff;
-            }
+            body { font-family: sans-serif; text-align: center; padding: 20px; margin: 0; }
+            .label-card { border: 1px dashed #ccc; padding: 15px; display: inline-block; border-radius: 8px; background: #fff; }
             h3 { margin: 5px 0; font-size: 16px; }
             p { margin: 4px 0; font-size: 14px; }
             .price { font-weight: bold; color: #d32f2f; font-size: 18px; }
-            @media print {
-              body { padding: 0; }
-              .label-card { border: none; }
-            }
           </style>
         </head>
         <body>
@@ -124,16 +103,10 @@ export default function App() {
             <p style="font-size: 12px; color: #666;">Exp: ${batch.expiry_date}</p>
             <svg id="barcode"></svg>
           </div>
-
           <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
           <script>
             window.onload = function() {
-              JsBarcode("#barcode", "${batch.batch_id}", {
-                format: "CODE128",
-                width: 1.5,
-                height: 50,
-                displayValue: true
-              });
+              JsBarcode("#barcode", "${batch.batch_id}", { format: "CODE128", width: 1.5, height: 50, displayValue: true });
               window.print();
               window.close();
             }
@@ -144,24 +117,68 @@ export default function App() {
     printWindow.document.close()
   }
 
-  // Filter dan Search Logic
+  // Tambah produk ke keranjang POS
+  const addToCart = (batch) => {
+    if (batch.stock_quantity <= 0) {
+      alert('Stok batch ini habis!')
+      return
+    }
+
+    setPosCart(prevCart => {
+      const existing = prevCart.find(item => item.batch_id === batch.batch_id)
+      if (existing) {
+        if (existing.qty >= batch.stock_quantity) {
+          alert('Jumlah melebihi stok yang tersedia di batch ini!')
+          return prevCart
+        }
+        return prevCart.map(item => 
+          item.batch_id === batch.batch_id ? { ...item, qty: item.qty + 1 } : item
+        )
+      } else {
+        return [...prevCart, { ...batch, qty: 1 }]
+      }
+    })
+  }
+
+  // Proses Checkout Kasir (Kurangi Stok di Database)
+  const handleCheckout = async () => {
+    if (posCart.length === 0) return
+    if (!window.confirm('Proses transaksi pembayaran ini? Stok akan otomatis dikurangi.')) return
+
+    for (const item of posCart) {
+      const newStock = item.stock_quantity - item.qty
+      const { error } = await supabase
+        .from('item_batches')
+        .update({ stock_quantity: newStock })
+        .eq('batch_id', item.batch_id)
+
+      if (error) {
+        alert(`Gagal memperbarui stok untuk Batch #${item.batch_id}: ` + error.message)
+        return
+      }
+    }
+
+    alert('Transaksi berhasil! Stok telah diperbarui secara otomatis.')
+    setPosCart([])
+    setShowPos(false)
+    fetchBatches()
+  }
+
   const filteredBatches = batches.filter((batch) => {
     const matchesSearch = batch.product_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           String(batch.batch_id).includes(searchTerm)
-    
     if (filterType === 'urgent') {
       return matchesSearch && (batch.days_left !== undefined && batch.days_left <= 3)
     } else if (filterType === 'safe') {
       return matchesSearch && (batch.days_left !== undefined && batch.days_left > 3)
     }
-    
     return matchesSearch
   })
 
-  // Perhitungan Statistik Real-time untuk Widget Dashboard
   const totalBatchesCount = batches.length
   const urgentBatchesCount = batches.filter(b => b.days_left !== undefined && b.days_left <= 3).length
   const totalStockCount = batches.reduce((sum, b) => sum + (b.stock_quantity || 0), 0)
+  const cartTotalAmount = posCart.reduce((sum, item) => sum + (item.current_price * item.qty), 0)
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-6 md:p-10">
@@ -177,7 +194,14 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-3 flex-wrap">
-            {/* Tombol Buka Scanner Kamera */}
+            {/* Tombol Kasir / POS */}
+            <button 
+              onClick={() => setShowPos(true)}
+              className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
+            >
+              🛒 Kasir POS {posCart.length > 0 && `(${posCart.reduce((a,b)=>a+b.qty,0)})`}
+            </button>
+
             <button 
               onClick={() => setShowScanner(true)}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
@@ -200,6 +224,71 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* Modal Kasir / POS */}
+        {showPos && (
+          <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
+            <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl max-h-[90vh] flex flex-col">
+              <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
+                <h3 className="text-lg font-bold text-slate-900">Kasir / Transaksi Penjualan</h3>
+                <button 
+                  onClick={() => setShowPos(false)}
+                  className="text-slate-400 hover:text-slate-600 text-sm font-bold px-2 py-1 cursor-pointer"
+                >
+                  ✕ Tutup
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto mb-4">
+                {posCart.length === 0 ? (
+                  <p className="text-slate-400 text-center py-8 text-sm">Keranjang kosong. Klik "Pilih Jual" pada produk di bawah untuk menambahkan item.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {posCart.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200">
+                        <div>
+                          <h4 className="font-bold text-slate-900 text-sm">{item.product_name}</h4>
+                          <p className="text-xs text-slate-500">Batch #{item.batch_id} • Rp {item.current_price?.toLocaleString()}</p>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs font-semibold bg-white border border-slate-200 px-3 py-1 rounded-lg">
+                            Qty: {item.qty}
+                          </span>
+                          <span className="font-bold text-slate-900 text-sm">
+                            Rp {(item.current_price * item.qty).toLocaleString()}
+                          </span>
+                          <button 
+                            onClick={() => {
+                              setPosCart(posCart.filter(c => c.batch_id !== item.batch_id))
+                            }}
+                            className="text-red-500 hover:text-red-700 text-xs cursor-pointer"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {posCart.length > 0 && (
+                <div className="border-t border-slate-100 pt-4">
+                  <div className="flex justify-between items-center mb-4">
+                    <span className="font-bold text-slate-700">Total Pembayaran:</span>
+                    <span className="text-xl font-extrabold text-slate-900">Rp {cartTotalAmount.toLocaleString()}</span>
+                  </div>
+                  <button 
+                    onClick={handleCheckout}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm transition cursor-pointer shadow-sm"
+                  >
+                    Selesaikan Pembayaran & Kurangi Stok
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Modal Scanner Kamera */}
         {showScanner && (
@@ -359,7 +448,6 @@ export default function App() {
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${batch.days_left !== undefined && batch.days_left <= 3 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
                         {batch.days_left !== undefined ? `${batch.days_left} Hari Lagi` : 'Segera Exp'}
                       </span>
-                      {/* Tombol Hapus */}
                       <button 
                         onClick={() => handleDeleteBatch(batch.batch_id)}
                         className="text-slate-400 hover:text-red-600 transition text-xs p-1 cursor-pointer"
@@ -392,13 +480,20 @@ export default function App() {
                     </span>
                   </div>
 
-                  {/* Tombol Cetak Barcode */}
-                  <button
-                    onClick={() => handlePrintBarcode(batch)}
-                    className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2 px-3 rounded-xl text-xs transition flex items-center justify-center gap-2 cursor-pointer"
-                  >
-                    🖨️ Cetak Barcode Batch
-                  </button>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => handlePrintBarcode(batch)}
+                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2 px-2 rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      🖨️ Cetak
+                    </button>
+                    <button
+                      onClick={() => addToCart(batch)}
+                      className="bg-amber-600 hover:bg-amber-700 text-white font-medium py-2 px-2 rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer shadow-sm"
+                    >
+                      🛒 Jual
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
