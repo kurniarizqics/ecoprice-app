@@ -7,20 +7,19 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
-  const [showPos, setShowPos] = useState(false) // State untuk modal kasir / POS
+  const [showPos, setShowPos] = useState(false)
 
-  // State untuk pencarian dan filter
+  // State untuk pencarian, filter, dan active tab mobile
   const [searchTerm, setSearchTerm] = useState('')
   const [filterType, setFilterType] = useState('all')
+  const [activeTab, setActiveTab] = useState('home') // 'home', 'pos', 'scan', 'add'
 
-  // State form input untuk batch baru
   const [formData, setFormData] = useState({
     product_id: '8991234567890',
     stock_quantity: '',
     expiry_date: ''
   })
 
-  // State untuk keranjang kasir (POS)
   const [posCart, setPosCart] = useState([])
 
   const fetchBatches = async () => {
@@ -61,6 +60,7 @@ export default function App() {
       alert('Berhasil menambah batch baru!')
       setFormData({ product_id: '8991234567890', stock_quantity: '', expiry_date: '' })
       setShowForm(false)
+      setActiveTab('home')
       fetchBatches()
     }
   }
@@ -117,7 +117,6 @@ export default function App() {
     printWindow.document.close()
   }
 
-  // Tambah produk ke keranjang POS
   const addToCart = (batch) => {
     if (batch.stock_quantity <= 0) {
       alert('Stok batch ini habis!')
@@ -140,7 +139,6 @@ export default function App() {
     })
   }
 
-  // Proses Checkout Kasir (Kurangi Stok di Database)
   const handleCheckout = async () => {
     if (posCart.length === 0) return
     if (!window.confirm('Proses transaksi pembayaran ini? Stok akan otomatis dikurangi.')) return
@@ -181,7 +179,7 @@ export default function App() {
   const cartTotalAmount = posCart.reduce((sum, item) => sum + (item.current_price * item.qty), 0)
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 p-6 md:p-10">
+    <div className="min-h-screen bg-slate-50 text-slate-800 p-6 md:p-10 pb-24 md:pb-10">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
@@ -193,8 +191,7 @@ export default function App() {
             <p className="text-sm text-slate-500">Sistem otomatis menampilkan harga tiap batch secara real-time.</p>
           </div>
           
-          <div className="flex items-center gap-3 flex-wrap">
-            {/* Tombol Kasir / POS */}
+          <div className="hidden md:flex items-center gap-3 flex-wrap">
             <button 
               onClick={() => setShowPos(true)}
               className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
@@ -241,7 +238,7 @@ export default function App() {
 
               <div className="flex-1 overflow-y-auto mb-4">
                 {posCart.length === 0 ? (
-                  <p className="text-slate-400 text-center py-8 text-sm">Keranjang kosong. Klik "Pilih Jual" pada produk di bawah untuk menambahkan item.</p>
+                  <p className="text-slate-400 text-center py-8 text-sm">Keranjang kosong. Klik "Jual" pada produk di bawah untuk menambahkan item.</p>
                 ) : (
                   <div className="space-y-3">
                     {posCart.map((item, idx) => (
@@ -499,6 +496,55 @@ export default function App() {
             ))}
           </div>
         )}
+
+        {/* Floating Bottom Navigation Bar (Khusus Tampilan Mobile) */}
+        <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200 px-4 py-2 flex justify-around items-center z-40 shadow-lg">
+          <button 
+            onClick={() => { setShowForm(false); setShowPos(false); setShowScanner(false); }}
+            className="flex flex-col items-center text-slate-700 hover:text-emerald-600 text-xs font-medium cursor-pointer py-1"
+          >
+            <span className="text-lg">🏠</span>
+            <span>Beranda</span>
+          </button>
+          
+          <button 
+            onClick={() => setShowScanner(true)}
+            className="flex flex-col items-center text-slate-700 hover:text-indigo-600 text-xs font-medium cursor-pointer py-1"
+          >
+            <span className="text-lg">📷</span>
+            <span>Scan</span>
+          </button>
+
+          <button 
+            onClick={() => setShowPos(true)}
+            className="flex flex-col items-center text-slate-700 hover:text-amber-600 text-xs font-medium cursor-pointer py-1 relative"
+          >
+            <span className="text-lg">🛒</span>
+            <span>Kasir</span>
+            {posCart.length > 0 && (
+              <span className="absolute top-0 right-2 bg-amber-600 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
+                {posCart.reduce((a,b)=>a+b.qty,0)}
+              </span>
+            )}
+          </button>
+
+          <button 
+            onClick={() => { setShowForm(!showForm); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+            className="flex flex-col items-center text-slate-700 hover:text-emerald-600 text-xs font-medium cursor-pointer py-1"
+          >
+            <span className="text-lg">➕</span>
+            <span>Tambah</span>
+          </button>
+
+          <button 
+            onClick={fetchBatches}
+            className="flex flex-col items-center text-slate-700 hover:text-slate-900 text-xs font-medium cursor-pointer py-1"
+          >
+            <span className="text-lg">🔄</span>
+            <span>Sync</span>
+          </button>
+        </div>
+
       </div>
     </div>
   )
