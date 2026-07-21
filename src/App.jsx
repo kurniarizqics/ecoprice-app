@@ -31,6 +31,7 @@ export default function App() {
   })
 
   const [posCart, setPosCart] = useState([])
+  const [posSearch, setPosSearch] = useState('')
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -209,6 +210,70 @@ export default function App() {
     printWindow.document.close()
   }
 
+  const handlePrintReceipt = (transaction, items) => {
+    const printWindow = window.open('', '_receipt', 'height=650,width=400')
+    const formattedDate = new Date(transaction.created_at || Date.now()).toLocaleString('id-ID')
+    
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Struk Belanja - EcoPrice</title>
+          <style>
+            body { font-family: 'Courier New', monospace; text-align: center; padding: 15px; margin: 0; font-size: 12px; color: #111; }
+            .header { margin-bottom: 15px; border-bottom: 1px dashed #333; padding-bottom: 10px; }
+            h2 { margin: 0; font-size: 16px; font-weight: bold; }
+            p { margin: 3px 0; }
+            .items { text-align: left; width: 100%; border-collapse: collapse; margin-top: 10px; margin-bottom: 10px; border-bottom: 1px dashed #333; padding-bottom: 10px; }
+            .items th { border-bottom: 1px solid #333; font-size: 11px; padding-bottom: 4px; }
+            .items td { padding: 4px 0; font-size: 11px; vertical-align: top; }
+            .total-section { text-align: right; margin-top: 10px; font-size: 13px; font-weight: bold; }
+            .footer { margin-top: 20px; font-size: 10px; color: #555; border-top: 1px dashed #333; pt: 10px; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <h2>🌿 ECOPRICE STORE</h2>
+            <p>Sistem Minimarket Anti-Waste</p>
+            <p>Nota: #${transaction.transaction_id}</p>
+            <p>${formattedDate}</p>
+          </div>
+          <table class="items">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th style="text-align:center;">Qty</th>
+                <th style="text-align:right;">Subtotal</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${items.map(i => `
+                <tr>
+                  <td>${i.product_name}<br/><span style="font-size:9px; color:#555;">@Rp ${Number(i.price_at_sale).toLocaleString()}</span></td>
+                  <td style="text-align:center;">${i.qty}</td>
+                  <td style="text-align:right;">Rp ${Number(i.subtotal).toLocaleString()}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+          <div class="total-section">
+            <p>TOTAL: Rp ${Number(transaction.total_amount).toLocaleString()}</p>
+          </div>
+          <div class="footer">
+            <p>Terima Kasih Telah Berbelanja!</p>
+            <p>Barang diskon expired aman dikonsumsi.</p>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+              window.close();
+            }
+          </script>
+        </body>
+      </html>
+    `)
+    printWindow.document.close()
+  }
+
   const addToCart = (batch) => {
     if (batch.stock_quantity <= 0) {
       alert('Stok batch ini habis!')
@@ -248,6 +313,8 @@ export default function App() {
     }
 
     const newTxId = txData[0].transaction_id
+    const transactionRecord = txData[0]
+    const insertedItems = []
 
     for (const item of posCart) {
       const subtotal = item.current_price * item.qty
@@ -261,6 +328,13 @@ export default function App() {
         subtotal: subtotal
       }])
 
+      insertedItems.push({
+        product_name: item.product_name,
+        qty: item.qty,
+        price_at_sale: item.current_price,
+        subtotal: subtotal
+      })
+
       const newStock = item.stock_quantity - item.qty
       await supabase
         .from('item_batches')
@@ -269,7 +343,12 @@ export default function App() {
     }
 
     alert('Transaksi berhasil & tercatat di laporan!')
+    
+    // Cetak Struk Otomatis
+    handlePrintReceipt(transactionRecord, insertedItems)
+
     setPosCart([])
+    setPosSearch('')
     setShowPos(false)
     fetchBatches()
     fetchTransactions()
@@ -286,6 +365,12 @@ export default function App() {
       return matchesSearch && matchesCategory && (batch.days_left !== undefined && batch.days_left > 3)
     }
     return matchesSearch && matchesCategory
+  })
+
+  // Produk untuk pencarian di dalam Kasir POS
+  const posAvailableBatches = batches.filter(batch => {
+    const query = posSearch.toLowerCase()
+    return batch.product_name?.toLowerCase().includes(query) || String(batch.batch_id).includes(query)
   })
 
   const totalBatchesCount = batches.length
@@ -419,12 +504,15 @@ export default function App() {
           </div>
         </div>
 
-        {/* Modal Kasir / POS */}
+        {/* Modal Kasir / POS dengan Pencarian Instan & Keranjang */}
         {showPos && (
           <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl max-h-[90vh] flex flex-col">
+            <div className="bg-white rounded-2xl max-w-3xl w-full p-6 shadow-xl max-h-[92vh] flex flex-col">
               <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-3">
-                <h3 className="text-lg font-bold text-slate-900">Kasir / Transaksi Penjualan</h3>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Kasir / Transaksi Penjualan POS</h3>
+                  <p className="text-xs text-slate-500">Cari produk instan di bawah atau masukkan ke keranjang belanja.</p>
+                </div>
                 <button 
                   onClick={() => setShowPos(false)}
                   className="text-slate-400 hover:text-slate-600 text-sm font-bold px-2 py-1 cursor-pointer"
@@ -433,29 +521,83 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto mb-4">
+              {/* Pencarian Produk Cepat di Kasir */}
+              <div className="mb-4">
+                <input 
+                  type="text"
+                  placeholder="🔍 Ketik nama produk / No. Batch untuk ditambahkan..."
+                  value={posSearch}
+                  onChange={(e) => setPosSearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+                {posSearch.trim() !== '' && (
+                  <div className="mt-2 max-h-40 overflow-y-auto border border-slate-200 rounded-xl bg-white shadow-sm divide-y divide-slate-100">
+                    {posAvailableBatches.length === 0 ? (
+                      <p className="p-3 text-xs text-slate-400 text-center">Produk tidak ditemukan.</p>
+                    ) : (
+                      posAvailableBatches.map((b, idx) => (
+                        <div key={idx} className="flex justify-between items-center p-2.5 hover:bg-slate-50 transition">
+                          <div>
+                            <span className="font-bold text-slate-900 text-xs">{b.product_name}</span>
+                            <span className="text-[10px] text-slate-400 ml-2">Batch #{b.batch_id} • Stok: {b.stock_quantity}</span>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs font-extrabold text-amber-600">Rp {(b.current_price || 0).toLocaleString()}</span>
+                            <button 
+                              onClick={() => addToCart(b)}
+                              className="bg-amber-600 hover:bg-amber-700 text-white text-xs px-3 py-1.5 rounded-lg font-medium cursor-pointer"
+                            >
+                              + Tambah
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Daftar Keranjang Belanja */}
+              <div className="flex-1 overflow-y-auto mb-4 border border-slate-100 rounded-xl p-3 bg-slate-50/50">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">Item dalam Keranjang</h4>
                 {posCart.length === 0 ? (
-                  <p className="text-slate-400 text-center py-8 text-sm">Keranjang kosong. Klik "Jual" pada produk di bawah untuk menambahkan item.</p>
+                  <p className="text-slate-400 text-center py-6 text-sm">Keranjang kosong. Cari produk di atas untuk mulai transaksi.</p>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     {posCart.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200">
+                      <div key={idx} className="flex justify-between items-center bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
                         <div>
                           <h4 className="font-bold text-slate-900 text-sm">{item.product_name}</h4>
-                          <p className="text-xs text-slate-500">Batch #{item.batch_id} • Rp {item.current_price?.toLocaleString()}</p>
+                          <p className="text-xs text-slate-500">Batch #{item.batch_id} • @Rp {item.current_price?.toLocaleString()}</p>
                         </div>
                         <div className="flex items-center gap-3">
-                          <span className="text-xs font-semibold bg-white border border-slate-200 px-3 py-1 rounded-lg">
-                            Qty: {item.qty}
-                          </span>
-                          <span className="font-bold text-slate-900 text-sm">
+                          <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden bg-white">
+                            <button 
+                              onClick={() => {
+                                setPosCart(posCart.map(c => c.batch_id === item.batch_id ? { ...c, qty: Math.max(1, c.qty - 1) } : c))
+                              }}
+                              className="px-2.5 py-1 text-slate-600 hover:bg-slate-100 text-xs font-bold cursor-pointer"
+                            >-</button>
+                            <span className="px-3 text-xs font-bold text-slate-800">{item.qty}</span>
+                            <button 
+                              onClick={() => {
+                                if (item.qty >= item.stock_quantity) {
+                                  alert('Stok batch tidak mencukupi!')
+                                  return
+                                }
+                                setPosCart(posCart.map(c => c.batch_id === item.batch_id ? { ...c, qty: c.qty + 1 } : c))
+                              }}
+                              className="px-2.5 py-1 text-slate-600 hover:bg-slate-100 text-xs font-bold cursor-pointer"
+                            >+</button>
+                          </div>
+                          <span className="font-bold text-slate-900 text-sm w-24 text-right">
                             Rp {(item.current_price * item.qty).toLocaleString()}
                           </span>
                           <button 
                             onClick={() => {
                               setPosCart(posCart.filter(c => c.batch_id !== item.batch_id))
                             }}
-                            className="text-red-500 hover:text-red-700 text-xs cursor-pointer"
+                            className="text-red-500 hover:text-red-700 text-xs cursor-pointer p-1"
                           >
                             🗑️
                           </button>
@@ -470,13 +612,13 @@ export default function App() {
                 <div className="border-t border-slate-100 pt-4">
                   <div className="flex justify-between items-center mb-4">
                     <span className="font-bold text-slate-700">Total Pembayaran:</span>
-                    <span className="text-xl font-extrabold text-slate-900">Rp {cartTotalAmount.toLocaleString()}</span>
+                    <span className="text-2xl font-extrabold text-emerald-600">Rp {cartTotalAmount.toLocaleString()}</span>
                   </div>
                   <button 
                     onClick={handleCheckout}
-                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm transition cursor-pointer shadow-sm"
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm transition cursor-pointer shadow-sm flex items-center justify-center gap-2"
                   >
-                    Selesaikan Pembayaran & Simpan Laporan
+                    <span>🖨️ Selesaikan Pembayaran & Cetak Struk</span>
                   </button>
                 </div>
               )}
@@ -554,9 +696,17 @@ export default function App() {
                           {new Date(tx.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}
                         </span>
                       </div>
-                      <span className="text-base font-extrabold text-emerald-600">
-                        Rp {Number(tx.total_amount).toLocaleString()}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => handlePrintReceipt(tx, tx.transaction_items || [])}
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-1.5 rounded-lg transition cursor-pointer"
+                        >
+                          🖨️ Cetak Ulang Struk
+                        </button>
+                        <span className="text-base font-extrabold text-emerald-600">
+                          Rp {Number(tx.total_amount).toLocaleString()}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="space-y-2">
@@ -693,7 +843,7 @@ export default function App() {
               </div>
             </div>
 
-            <h2 className="text-xl font-bold text-slate-900 mb-4">Daftar Produk Susu</h2>
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Daftar Produk Toko</h2>
 
             {loading ? (
               <p className="text-slate-500 text-sm">Memuat data produk...</p>
