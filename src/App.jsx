@@ -4,15 +4,16 @@ import { Scanner } from '@yudiel/react-qr-scanner'
 
 export default function App() {
   const [batches, setBatches] = useState([])
+  const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
   const [showPos, setShowPos] = useState(false)
 
-  // State untuk pencarian, filter, dan active tab mobile
+  // State untuk pencarian, filter, dan active tab (home, report, pos, scan, add)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterType, setFilterType] = useState('all')
-  const [activeTab, setActiveTab] = useState('home') // 'home', 'pos', 'scan', 'add'
+  const [activeTab, setActiveTab] = useState('home') // 'home', 'report'
 
   const [formData, setFormData] = useState({
     product_id: '8991234567890',
@@ -37,8 +38,23 @@ export default function App() {
     setLoading(false)
   }
 
+  // Ambil riwayat transaksi dari Supabase
+  const fetchTransactions = async () => {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*, transaction_items(*)')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching transactions:', error)
+    } else {
+      setTransactions(data || [])
+    }
+  }
+
   useEffect(() => {
     fetchBatches()
+    fetchTransactions()
   }, [])
 
   const handleSubmit = async (e) => {
@@ -139,27 +155,51 @@ export default function App() {
     })
   }
 
+  // Proses Checkout Kasir & Simpan Riwayat Transaksi ke Database
   const handleCheckout = async () => {
     if (posCart.length === 0) return
     if (!window.confirm('Proses transaksi pembayaran ini? Stok akan otomatis dikurangi.')) return
 
+    const totalAmount = posCart.reduce((sum, item) => sum + (item.current_price * item.qty), 0)
+
+    // 1. Simpan ke tabel transactions
+    const { data: txData, error: txError } = await supabase
+      .from('transactions')
+      .insert([{ total_amount: totalAmount }])
+      .select()
+
+    if (txError) {
+      alert('Gagal memproses transaksi: ' + txError.message)
+      return
+    }
+
+    const newTxId = txData[0].transaction_id
+
+    // 2. Simpan item detail ke transaction_items & kurangi stok batch
     for (const item of posCart) {
+      const subtotal = item.current_price * item.qty
+      
+      await supabase.from('transaction_items').insert([{
+        transaction_id: newTxId,
+        batch_id: item.batch_id,
+        product_name: item.product_name,
+        qty: item.qty,
+        price_at_sale: item.current_price,
+        subtotal: subtotal
+      }])
+
       const newStock = item.stock_quantity - item.qty
-      const { error } = await supabase
+      await supabase
         .from('item_batches')
         .update({ stock_quantity: newStock })
         .eq('batch_id', item.batch_id)
-
-      if (error) {
-        alert(`Gagal memperbarui stok untuk Batch #${item.batch_id}: ` + error.message)
-        return
-      }
     }
 
-    alert('Transaksi berhasil! Stok telah diperbarui secara otomatis.')
+    alert('Transaksi berhasil & tercatat di laporan!')
     setPosCart([])
     setShowPos(false)
     fetchBatches()
+    fetchTransactions()
   }
 
   const filteredBatches = batches.filter((batch) => {
@@ -178,6 +218,13 @@ export default function App() {
   const totalStockCount = batches.reduce((sum, b) => sum + (b.stock_quantity || 0), 0)
   const cartTotalAmount = posCart.reduce((sum, item) => sum + (item.current_price * item.qty), 0)
 
+  // Statistik Laporan Penjualan
+  const totalRevenue = transactions.reduce((sum, tx) => sum + Number(tx.total_amount), 0)
+  const totalItemsSold = transactions.reduce((sum, tx) => {
+    const itemsCount = tx.transaction_items?.reduce((s, i) => s + i.qty, 0) || 0
+    return sum + itemsCount
+  }, 0)
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 p-6 md:p-10 pb-24 md:pb-10">
       <div className="max-w-6xl mx-auto">
@@ -193,31 +240,40 @@ export default function App() {
           
           <div className="hidden md:flex items-center gap-3 flex-wrap">
             <button 
+              onClick={() => setActiveTab('home')}
+              className={`font-medium px-4 py-2 rounded-lg shadow-sm transition text-sm cursor-pointer ${activeTab === 'home' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+            >
+              📦 Produk & Stok
+            </button>
+            <button 
+              onClick={() => setActiveTab('report')}
+              className={`font-medium px-4 py-2 rounded-lg shadow-sm transition text-sm cursor-pointer ${activeTab === 'report' ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'}`}
+            >
+              📊 Laporan Penjualan
+            </button>
+            <button 
               onClick={() => setShowPos(true)}
               className="bg-amber-600 hover:bg-amber-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
             >
               🛒 Kasir POS {posCart.length > 0 && `(${posCart.reduce((a,b)=>a+b.qty,0)})`}
             </button>
-
             <button 
               onClick={() => setShowScanner(true)}
               className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
             >
               📷 Scan Barcode
             </button>
-
             <button 
               onClick={() => setShowForm(!showForm)}
               className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
             >
-              <span>{showForm ? '✕ Tutup Form' : '+ Tambah Batch Baru'}</span>
+              <span>{showForm ? '✕ Tutup Form' : '+ Tambah Batch'}</span>
             </button>
-
             <button 
-              onClick={fetchBatches}
+              onClick={() => { fetchBatches(); fetchTransactions(); }}
               className="bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 font-medium px-4 py-2 rounded-lg shadow-sm transition flex items-center gap-2 text-sm cursor-pointer"
             >
-              🔄 Sync & Refresh
+              🔄 Sync
             </button>
           </div>
         </div>
@@ -279,7 +335,7 @@ export default function App() {
                     onClick={handleCheckout}
                     className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl text-sm transition cursor-pointer shadow-sm"
                   >
-                    Selesaikan Pembayaran & Kurangi Stok
+                    Selesaikan Pembayaran & Simpan Laporan
                   </button>
                 </div>
               )}
@@ -308,6 +364,7 @@ export default function App() {
                       const scannedText = result[0].rawValue;
                       setSearchTerm(scannedText);
                       setShowScanner(false);
+                      setActiveTab('home');
                     }
                   }}
                   onError={(error) => console.log(error)}
@@ -320,193 +377,265 @@ export default function App() {
           </div>
         )}
 
-        {/* Ringkasan Statistik Dashboard */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Batch Aktif</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{totalBatchesCount} <span className="text-sm font-normal text-slate-500">Batch</span></p>
-          </div>
-          
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">🔥 Mendesak (&le; 3 Hari)</p>
-            <p className={`text-2xl font-bold mt-1 ${urgentBatchesCount > 0 ? 'text-red-600' : 'text-slate-900'}`}>
-              {urgentBatchesCount} <span className="text-sm font-normal text-slate-500">Batch</span>
-            </p>
-          </div>
+        {/* KONTEN UTAMA BERDASARKAN TAB AKTIF */}
+        {activeTab === 'report' ? (
+          <div>
+            <h2 className="text-xl font-bold text-slate-900 mb-4">📊 Laporan & Riwayat Penjualan</h2>
 
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Stok Tersedia</p>
-            <p className="text-2xl font-bold text-slate-900 mt-1">{totalStockCount} <span className="text-sm font-normal text-slate-500">Pcs</span></p>
-          </div>
-        </div>
+            {/* Widget Ringkasan Omset */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Pendapatan (Omset)</p>
+                <p className="text-2xl font-bold text-emerald-600 mt-1">Rp {totalRevenue.toLocaleString()}</p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Transaksi Berhasil</p>
+                <p className="text-2xl font-bold text-slate-900 mt-1">{transactions.length} <span className="text-sm font-normal text-slate-500">Nota</span></p>
+              </div>
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Produk Terjual</p>
+                <p className="text-2xl font-bold text-slate-900 mt-1">{totalItemsSold} <span className="text-sm font-normal text-slate-500">Pcs</span></p>
+              </div>
+            </div>
 
-        {/* Form Tambah Batch */}
-        {showForm && (
-          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 transition-all">
-            <h2 className="text-lg font-semibold text-slate-800 mb-4">Input Batch Produk Baru</h2>
-            <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Product ID</label>
+            {/* Daftar Riwayat Transaksi */}
+            <h3 className="text-lg font-bold text-slate-800 mb-3">Detail Nota Transaksi</h3>
+            {transactions.length === 0 ? (
+              <p className="text-slate-500 text-sm bg-white p-6 rounded-2xl border border-slate-200 text-center">Belum ada riwayat transaksi penjualan yang tercatat.</p>
+            ) : (
+              <div className="space-y-4">
+                {transactions.map((tx) => (
+                  <div key={tx.transaction_id} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b border-slate-100">
+                      <div>
+                        <span className="text-xs font-bold uppercase tracking-wider bg-slate-100 text-slate-700 px-2.5 py-1 rounded-md">
+                          Transaksi #{tx.transaction_id}
+                        </span>
+                        <span className="text-xs text-slate-400 ml-3">
+                          {new Date(tx.created_at).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}
+                        </span>
+                      </div>
+                      <span className="text-base font-extrabold text-emerald-600">
+                        Rp {Number(tx.total_amount).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <div className="space-y-2">
+                      {tx.transaction_items?.map((item, i) => (
+                        <div key={i} className="flex justify-between items-center text-sm">
+                          <span className="text-slate-700">
+                            • {item.product_name} <span className="text-xs text-slate-400">(Batch #{item.batch_id})</span> × {item.qty}
+                          </span>
+                          <span className="font-semibold text-slate-900">
+                            Rp {Number(item.subtotal).toLocaleString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            {/* Ringkasan Statistik Dashboard */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Batch Aktif</p>
+                <p className="text-2xl font-bold text-slate-900 mt-1">{totalBatchesCount} <span className="text-sm font-normal text-slate-500">Batch</span></p>
+              </div>
+              
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">🔥 Mendesak (&le; 3 Hari)</p>
+                <p className={`text-2xl font-bold mt-1 ${urgentBatchesCount > 0 ? 'text-red-600' : 'text-slate-900'}`}>
+                  {urgentBatchesCount} <span className="text-sm font-normal text-slate-500">Batch</span>
+                </p>
+              </div>
+
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Total Stok Tersedia</p>
+                <p className="text-2xl font-bold text-slate-900 mt-1">{totalStockCount} <span className="text-sm font-normal text-slate-500">Pcs</span></p>
+              </div>
+            </div>
+
+            {/* Form Tambah Batch */}
+            {showForm && (
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 mb-8 transition-all">
+                <h2 className="text-lg font-semibold text-slate-800 mb-4">Input Batch Produk Baru</h2>
+                <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Product ID</label>
+                    <input 
+                      type="text" 
+                      value={formData.product_id}
+                      onChange={(e) => setFormData({...formData, product_id: e.target.value})}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Jumlah Stok (Pcs)</label>
+                    <input 
+                      type="number" 
+                      placeholder="Contoh: 10"
+                      value={formData.stock_quantity}
+                      onChange={(e) => setFormData({...formData, stock_quantity: e.target.value})}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Tanggal Kadaluarsa</label>
+                    <input 
+                      type="date" 
+                      value={formData.expiry_date}
+                      onChange={(e) => setFormData({...formData, expiry_date: e.target.value})}
+                      className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      required
+                    />
+                  </div>
+
+                  <div className="flex items-end lg:col-span-3">
+                    <button 
+                      type="submit"
+                      className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2 rounded-lg text-sm transition cursor-pointer"
+                    >
+                      Simpan Batch Baru
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {/* Section Search & Filter Controls */}
+            <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center mb-6 gap-4">
+              <div className="w-full md:w-72">
                 <input 
-                  type="text" 
-                  value={formData.product_id}
-                  onChange={(e) => setFormData({...formData, product_id: e.target.value})}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  required
+                  type="text"
+                  placeholder="🔍 Cari nama produk / ID..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Jumlah Stok (Pcs)</label>
-                <input 
-                  type="number" 
-                  placeholder="Contoh: 10"
-                  value={formData.stock_quantity}
-                  onChange={(e) => setFormData({...formData, stock_quantity: e.target.value})}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-600 mb-1">Tanggal Kadaluarsa</label>
-                <input 
-                  type="date" 
-                  value={formData.expiry_date}
-                  onChange={(e) => setFormData({...formData, expiry_date: e.target.value})}
-                  className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  required
-                />
-              </div>
-
-              <div className="flex items-end lg:col-span-3">
+              <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0">
                 <button 
-                  type="submit"
-                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-medium py-2 rounded-lg text-sm transition cursor-pointer"
+                  onClick={() => setFilterType('all')}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'all' ? 'bg-slate-900 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
                 >
-                  Simpan Batch Baru
+                  Semua Batch
+                </button>
+                <button 
+                  onClick={() => setFilterType('urgent')}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'urgent' ? 'bg-red-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                >
+                  🔥 Mendesak (&le; 3 Hari)
+                </button>
+                <button 
+                  onClick={() => setFilterType('safe')}
+                  className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'safe' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
+                >
+                  🛡️ Aman (&gt; 3 Hari)
                 </button>
               </div>
-            </form>
-          </div>
-        )}
+            </div>
 
-        {/* Section Search & Filter Controls */}
-        <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center mb-6 gap-4">
-          <div className="w-full md:w-72">
-            <input 
-              type="text"
-              placeholder="🔍 Cari nama produk / ID..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-          </div>
+            {/* Daftar Produk */}
+            <h2 className="text-xl font-bold text-slate-900 mb-4">Daftar Produk Susu</h2>
 
-          <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0">
-            <button 
-              onClick={() => setFilterType('all')}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'all' ? 'bg-slate-900 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
-            >
-              Semua Batch
-            </button>
-            <button 
-              onClick={() => setFilterType('urgent')}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'urgent' ? 'bg-red-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
-            >
-              🔥 Mendesak (&le; 3 Hari)
-            </button>
-            <button 
-              onClick={() => setFilterType('safe')}
-              className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'safe' ? 'bg-emerald-600 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
-            >
-              🛡️ Aman (&gt; 3 Hari)
-            </button>
-          </div>
-        </div>
-
-        {/* Daftar Produk */}
-        <h2 className="text-xl font-bold text-slate-900 mb-4">Daftar Produk Susu</h2>
-
-        {loading ? (
-          <p className="text-slate-500 text-sm">Memuat data produk...</p>
-        ) : filteredBatches.length === 0 ? (
-          <p className="text-slate-500 text-sm">Tidak ada produk yang sesuai dengan pencarian atau filter.</p>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredBatches.map((batch, index) => (
-              <div key={index} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
-                <div>
-                  <div className="flex justify-between items-center mb-3">
-                    <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md">
-                      Batch #{batch.batch_id || index + 1}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${batch.days_left !== undefined && batch.days_left <= 3 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                        {batch.days_left !== undefined ? `${batch.days_left} Hari Lagi` : 'Segera Exp'}
-                      </span>
-                      <button 
-                        onClick={() => handleDeleteBatch(batch.batch_id)}
-                        className="text-slate-400 hover:text-red-600 transition text-xs p-1 cursor-pointer"
-                        title="Hapus Batch"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mb-4">
-                    <span className="text-xs font-medium text-slate-400 bg-slate-50 px-2 py-1 rounded">
-                      Stok: {batch.stock_quantity} pcs
-                    </span>
-                    <h3 className="text-lg font-bold text-slate-900 mt-2">{batch.product_name}</h3>
-                    <p className="text-xs text-slate-500">Exp: {batch.expiry_date}</p>
-                  </div>
-                </div>
-
-                <div>
-                  <div className="border-t border-slate-100 pt-4 flex items-center justify-between mb-3">
+            {loading ? (
+              <p className="text-slate-500 text-sm">Memuat data produk...</p>
+            ) : filteredBatches.length === 0 ? (
+              <p className="text-slate-500 text-sm">Tidak ada produk yang sesuai dengan pencarian atau filter.</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {filteredBatches.map((batch, index) => (
+                  <div key={index} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col justify-between">
                     <div>
-                      <span className="text-xs text-slate-400 line-through">Rp {batch.normal_price?.toLocaleString()}</span>
-                      <p className="text-xl font-extrabold text-slate-900">Rp {(batch.current_price || 0).toLocaleString()}</p>
-                    </div>
-                    <span className="bg-red-600 text-white text-xs font-bold px-2.5 py-1 rounded-md">
-                      {batch.current_price < batch.normal_price 
-                        ? `DISKON ${Math.round((1 - batch.current_price / batch.normal_price) * 100)}%` 
-                        : 'NORMAL'}
-                    </span>
-                  </div>
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md">
+                          Batch #{batch.batch_id || index + 1}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${batch.days_left !== undefined && batch.days_left <= 3 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                            {batch.days_left !== undefined ? `${batch.days_left} Hari Lagi` : 'Segera Exp'}
+                          </span>
+                          <button 
+                            onClick={() => handleDeleteBatch(batch.batch_id)}
+                            className="text-slate-400 hover:text-red-600 transition text-xs p-1 cursor-pointer"
+                            title="Hapus Batch"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={() => handlePrintBarcode(batch)}
-                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2 px-2 rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer"
-                    >
-                      🖨️ Cetak
-                    </button>
-                    <button
-                      onClick={() => addToCart(batch)}
-                      className="bg-amber-600 hover:bg-amber-700 text-white font-medium py-2 px-2 rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer shadow-sm"
-                    >
-                      🛒 Jual
-                    </button>
+                      <div className="mb-4">
+                        <span className="text-xs font-medium text-slate-400 bg-slate-50 px-2 py-1 rounded">
+                          Stok: {batch.stock_quantity} pcs
+                        </span>
+                        <h3 className="text-lg font-bold text-slate-900 mt-2">{batch.product_name}</h3>
+                        <p className="text-xs text-slate-500">Exp: {batch.expiry_date}</p>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="border-t border-slate-100 pt-4 flex items-center justify-between mb-3">
+                        <div>
+                          <span className="text-xs text-slate-400 line-through">Rp {batch.normal_price?.toLocaleString()}</span>
+                          <p className="text-xl font-extrabold text-slate-900">Rp {(batch.current_price || 0).toLocaleString()}</p>
+                        </div>
+                        <span className="bg-red-600 text-white text-xs font-bold px-2.5 py-1 rounded-md">
+                          {batch.current_price < batch.normal_price 
+                            ? `DISKON ${Math.round((1 - batch.current_price / batch.normal_price) * 100)}%` 
+                            : 'NORMAL'}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => handlePrintBarcode(batch)}
+                          className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium py-2 px-2 rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer"
+                        >
+                          🖨️ Cetak
+                        </button>
+                        <button
+                          onClick={() => addToCart(batch)}
+                          className="bg-amber-600 hover:bg-amber-700 text-white font-medium py-2 px-2 rounded-xl text-xs transition flex items-center justify-center gap-1 cursor-pointer shadow-sm"
+                        >
+                          🛒 Jual
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
 
-        {/* Floating Bottom Navigation Bar (Khusus Tampilan Mobile) */}
+        {/* Floating Bottom Navigation Bar (Khusus Mobile) */}
         <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t border-slate-200 px-4 py-2 flex justify-around items-center z-40 shadow-lg">
           <button 
-            onClick={() => { setShowForm(false); setShowPos(false); setShowScanner(false); }}
-            className="flex flex-col items-center text-slate-700 hover:text-emerald-600 text-xs font-medium cursor-pointer py-1"
+            onClick={() => { setActiveTab('home'); setShowForm(false); setShowPos(false); setShowScanner(false); }}
+            className={`flex flex-col items-center text-xs font-medium cursor-pointer py-1 ${activeTab === 'home' ? 'text-emerald-600 font-bold' : 'text-slate-700'}`}
           >
-            <span className="text-lg">🏠</span>
-            <span>Beranda</span>
+            <span className="text-lg">📦</span>
+            <span>Produk</span>
           </button>
           
+          <button 
+            onClick={() => setActiveTab('report')}
+            className={`flex flex-col items-center text-xs font-medium cursor-pointer py-1 ${activeTab === 'report' ? 'text-emerald-600 font-bold' : 'text-slate-700'}`}
+          >
+            <span className="text-lg">📊</span>
+            <span>Laporan</span>
+          </button>
+
           <button 
             onClick={() => setShowScanner(true)}
             className="flex flex-col items-center text-slate-700 hover:text-indigo-600 text-xs font-medium cursor-pointer py-1"
@@ -529,19 +658,11 @@ export default function App() {
           </button>
 
           <button 
-            onClick={() => { setShowForm(!showForm); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+            onClick={() => { setActiveTab('home'); setShowForm(!showForm); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
             className="flex flex-col items-center text-slate-700 hover:text-emerald-600 text-xs font-medium cursor-pointer py-1"
           >
             <span className="text-lg">➕</span>
             <span>Tambah</span>
-          </button>
-
-          <button 
-            onClick={fetchBatches}
-            className="flex flex-col items-center text-slate-700 hover:text-slate-900 text-xs font-medium cursor-pointer py-1"
-          >
-            <span className="text-lg">🔄</span>
-            <span>Sync</span>
           </button>
         </div>
 
