@@ -7,7 +7,6 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [showScanner, setShowScanner] = useState(false) // State untuk modal scanner kamera
-  const [scanResult, setScanResult] = useState(null)     // Hasil scan barcode
 
   // State untuk pencarian dan filter
   const [searchTerm, setSearchTerm] = useState('')
@@ -221,8 +220,8 @@ export default function App() {
                   onScan={(result) => {
                     if (result && result.length > 0) {
                       const scannedText = result[0].rawValue;
-                      setSearchTerm(scannedText); // Otomatis masukkan hasil scan ke kolom pencarian
-                      setShowScanner(false);      // Tutup scanner otomatis
+                      setSearchTerm(scannedText);
+                      setShowScanner(false);
                     }
                   }}
                   onError={(error) => console.log(error)}
