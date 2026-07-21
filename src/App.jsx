@@ -10,6 +10,7 @@ export default function App() {
   const [isSignUp, setIsSignUp] = useState(false)
 
   const [batches, setBatches] = useState([])
+  const [categories, setCategories] = useState([])
   const [transactions, setTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
@@ -18,17 +19,19 @@ export default function App() {
 
   const [searchTerm, setSearchTerm] = useState('')
   const [filterType, setFilterType] = useState('all')
+  const [selectedCategory, setSelectedCategory] = useState('all')
   const [activeTab, setActiveTab] = useState('home')
 
   const [formData, setFormData] = useState({
     product_id: '8991234567890',
+    product_name: '',
+    category_id: '',
     stock_quantity: '',
     expiry_date: ''
   })
 
   const [posCart, setPosCart] = useState([])
 
-  // Cek sesi login saat aplikasi dimuat
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -59,6 +62,22 @@ export default function App() {
     setLoading(false)
   }
 
+  const fetchCategories = async () => {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('name', { ascending: true })
+
+    if (error) {
+      console.error('Error fetching categories:', error)
+    } else {
+      setCategories(data || [])
+      if (data && data.length > 0 && !formData.category_id) {
+        setFormData(prev => ({ ...prev, category_id: data[0].id }))
+      }
+    }
+  }
+
   const fetchTransactions = async () => {
     const { data, error } = await supabase
       .from('transactions')
@@ -75,17 +94,17 @@ export default function App() {
   useEffect(() => {
     if (session) {
       fetchBatches()
+      fetchCategories()
       fetchTransactions()
     }
   }, [session])
 
-  // Handler Login & Register
   const handleAuth = async (e) => {
     e.preventDefault()
     if (isSignUp) {
       const { error } = await supabase.auth.signUp({ email, password })
       if (error) alert('Gagal mendaftar: ' + error.message)
-      else alert('Pendaftaran berhasil! Silakan cek email atau langsung masuk jika konfirmasi dimatikan.')
+      else alert('Pendaftaran berhasil! Silakan masuk.')
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) alert('Gagal masuk: ' + error.message)
@@ -121,7 +140,13 @@ export default function App() {
       alert('Gagal menambah batch: ' + error.message)
     } else {
       alert('Berhasil menambah batch baru!')
-      setFormData({ product_id: '8991234567890', stock_quantity: '', expiry_date: '' })
+      setFormData({
+        product_id: '8991234567890',
+        product_name: '',
+        category_id: categories[0]?.id || '',
+        stock_quantity: '',
+        expiry_date: ''
+      })
       setShowForm(false)
       setActiveTab('home')
       fetchBatches()
@@ -253,12 +278,14 @@ export default function App() {
   const filteredBatches = batches.filter((batch) => {
     const matchesSearch = batch.product_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           String(batch.batch_id).includes(searchTerm)
+    const matchesCategory = selectedCategory === 'all' || batch.category_id === selectedCategory
+
     if (filterType === 'urgent') {
-      return matchesSearch && (batch.days_left !== undefined && batch.days_left <= 3)
+      return matchesSearch && matchesCategory && (batch.days_left !== undefined && batch.days_left <= 3)
     } else if (filterType === 'safe') {
-      return matchesSearch && (batch.days_left !== undefined && batch.days_left > 3)
+      return matchesSearch && matchesCategory && (batch.days_left !== undefined && batch.days_left > 3)
     }
-    return matchesSearch
+    return matchesSearch && matchesCategory
   })
 
   const totalBatchesCount = batches.length
@@ -276,7 +303,6 @@ export default function App() {
     return <div className="min-h-screen bg-slate-50 flex items-center justify-center text-slate-500 text-sm">Memuat sesi pengguna...</div>
   }
 
-  // TAMPILAN HALAMAN LOGIN JIKA BELUM MASUK
   if (!session) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-800 flex items-center justify-center p-4">
@@ -622,16 +648,27 @@ export default function App() {
               </div>
             )}
 
-            {/* Section Search & Filter Controls */}
+            {/* Section Search, Category Filter & Status Filter Controls */}
             <div className="flex flex-col md:flex-row justify-between items-stretch md:items-center mb-6 gap-4">
-              <div className="w-full md:w-72">
+              <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
                 <input 
                   type="text"
                   placeholder="🔍 Cari nama produk / ID..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 md:w-64"
                 />
+
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 text-slate-700"
+                >
+                  <option value="all">📁 Semua Kategori</option>
+                  {categories.map((cat) => (
+                    <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="flex items-center gap-2 overflow-x-auto pb-2 md:pb-0">
@@ -639,7 +676,7 @@ export default function App() {
                   onClick={() => setFilterType('all')}
                   className={`px-4 py-2 rounded-xl text-xs font-semibold transition cursor-pointer ${filterType === 'all' ? 'bg-slate-900 text-white shadow-sm' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'}`}
                 >
-                  Semua Batch
+                  Semua Status
                 </button>
                 <button 
                   onClick={() => setFilterType('urgent')}
@@ -688,11 +725,13 @@ export default function App() {
                       </div>
 
                       <div className="mb-4">
-                        <span className="text-xs font-medium text-slate-400 bg-slate-50 px-2 py-1 rounded">
-                          Stok: {batch.stock_quantity} pcs
-                        </span>
-                        <h3 className="text-lg font-bold text-slate-900 mt-2">{batch.product_name}</h3>
-                        <p className="text-xs text-slate-500">Exp: {batch.expiry_date}</p>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-medium text-slate-400 bg-slate-50 px-2 py-1 rounded">
+                            Stok: {batch.stock_quantity} pcs
+                          </span>
+                        </div>
+                        <h3 className="text-lg font-bold text-slate-900">{batch.product_name}</h3>
+                        <p className="text-xs text-slate-500 mt-1">Exp: {batch.expiry_date}</p>
                       </div>
                     </div>
 
